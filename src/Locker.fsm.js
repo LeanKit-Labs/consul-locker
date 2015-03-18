@@ -1,4 +1,5 @@
-var debug = require( "debug" )( "locker:fsm" );
+var debug = require( "debug" )( "consul-locker:fsm" );
+var _ = require( "lodash" );
 var util = require( "util" );
 var when = require( "when" );
 var machina = require( "machina" );
@@ -9,7 +10,7 @@ var Locker = machina.Fsm.extend( {
 		this.consul = consul;
 		this.strategy = strategy;
 
-		this.locks = {};
+		this._cache = {};
 
 		this.sessionName = options.name;
 		this.sessionId;
@@ -30,16 +31,7 @@ var Locker = machina.Fsm.extend( {
 	},
 
 	_startSession: function() {
-		return when.promise( function( resolve, reject ) {
-			this.consul.session.create( { name: this.sessionName }, function( err, session, response ) {
-				if ( err ) {
-					debug( "Error creating session: %s", error.toString() );
-					return reject( err );
-				}
-				debug( "Session created successfully" );
-				return resolve( session );
-			} );
-		}.bind( this ) );
+		return this.consul.session.create( { name: this.sessionName } );
 	},
 
 	_endSession: function() {
@@ -48,30 +40,59 @@ var Locker = machina.Fsm.extend( {
 
 	_lock: function( id ) {
 		var key = this._getKey( id );
+		var cached = this._cache[ key ];
+
+		// Check to see if this key has already been acquired
+		if ( cached === true ) {
+			// It has
+			return when.resolve( true );
+		} else if ( cached && _.isFunction( cached.then ) ) {
+			// This request is already in flight
+			// Return the cached promise
+			return cached;
+		}
+
+		var cacheDeferred = when.defer();
+
+		var promise = cacheDeferred.promise;
+
 		debug( "Acquiring key %s with sessionId: %s", key, this.sessionId );
-		return when.promise( function( resolve, reject ) {
-			var options = {
-				key: key,
-				value: JSON.stringify( this.lockValue ),
-				acquire: this.sessionId
-			};
-			this.consul.kv.set( options, function( err, result ) {
-				if ( err ) {
-					debug( "Locking error: %s", err.toString() );
-					return reject( err );
-				}
 
-				if ( result === false ) {
-					return reject( new Error( "Already locked" ) );
-				}
+		var options = {
+			key: key,
+			value: JSON.stringify( this.lockValue ),
+			acquire: this.sessionId
+		};
 
-				resolve( result );
-			} );
-		}.bind( this ) );
+		var onSuccess = function( result ) {
+			if ( result[ 0 ] === false ) {
+				return cacheDeferred.reject( new Error( "Already locked" ) );
+			}
+			return cacheDeferred.resolve( result[ 0 ] );
+		};
+
+		this.consul.kv.set( options ).then( onSuccess, cacheDeferred.reject );
+
+		var onResolve = function() {
+			this._cache[ key ] = true;
+		}.bind( this );
+
+		var onReject = function() {
+			this._cache[ key ] = false;
+		}.bind( this );
+
+		promise.then( onResolve, onReject );
+
+		this._cache[ key ] = promise;
+
+		return promise;
 	},
 
 	_release: function( id ) {
 		var key = this._getKey( id );
+		if ( this._cache[ key ] ) {
+			this._cache[ key ] = undefined;
+		}
 		return this.consul.kv.set( key, null, {
 			release: this.sessionId
 		} );
@@ -84,7 +105,8 @@ var Locker = machina.Fsm.extend( {
 		acquiring: {
 			_onEnter: function() {
 				debug( "Acquiring..." );
-				var onSuccess = function( session ) {
+				var onSuccess = function( result ) {
+					var session = result[ 0 ]
 					debug( "Session acquired with id %s", session.ID );
 					this.sessionId = session.ID;
 					this.transition( "ready" );

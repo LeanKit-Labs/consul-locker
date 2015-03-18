@@ -10,5 +10,11 @@ var toLift = {
 module.exports = function( _config ) {
 	var consul = consulFactory( _config );
 
+	_.each( toLift, function( methods, key ) {
+		_.each( methods, function( m ) {
+			consul[ key ][ m ] = lift( consul[ key ][ m ] );
+		} );
+	} );
+
 	return consul;
 };
