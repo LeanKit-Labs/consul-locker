@@ -1,0 +1,12 @@
+.DS_Store
+*node_modules
+*npm-debug*
+report/
+bower/
+public/css
+public/js
+server/log
+client/coverage
+_spec-tmp
+/tmp
+/coverage
