@@ -1,7 +1,7 @@
 {
-  "name": "locker",
+  "name": "consul-locker",
   "version": "0.0.1",
-  "description": "Distributed locker",
+  "description": "Distributed locks using Consul",
   "main": "src/index.js",
   "scripts": {
     "test": "gulp test"
