@@ -8,9 +8,6 @@ var Locker = machina.Fsm.extend( {
 	initialize: function( options, consul, strategy ) {
 		debug( "Initializing Locker FSM" );
 		this.consul = consul;
-		this.strategy = strategy;
-
-		this._cache = {};
 
 		this.sessionName = options.name;
 		this.sessionId;
@@ -24,6 +21,11 @@ var Locker = machina.Fsm.extend( {
 
 		debug( "Locker Name: %s", this.sessionName );
 
+		this.rebootCount = 0;
+		this.maxRetries = options.maxRetries || 10;
+		this.retryInterval = ( options.retryInterval || 30 ) * 1000;
+
+		this.strategy = strategy( this );
 	},
 
 	_getKey: function( id ) {
@@ -31,32 +33,43 @@ var Locker = machina.Fsm.extend( {
 	},
 
 	_startSession: function() {
-		return this.consul.session.create( { name: this.sessionName } );
+		return this.consul.session.create( { name: this.sessionName, lockdelay: "0s" } )
+			.then( function( result ) {
+				var session = result[ 0 ];
+				debug( "Session acquired with id %s", session.ID );
+				this.sessionId = session.ID;
+
+				this.emit( "session.start", this.sessionId );
+
+				return session;
+			}.bind( this ) );
 	},
 
 	_endSession: function() {
-		return this.consul.session.destroy( this.sessionId );
+		return this.consul.session.destroy( this.sessionId )
+			.then( function( result ) {
+				this.emit( "session.end", this.sessionId );
+				this.sessionId = undefined;
+			}.bind( this ) );
 	},
 
 	_lock: function( id ) {
 		var key = this._getKey( id );
-		var cached = this._cache[ key ];
-
-		// Check to see if this key has already been acquired
-		if ( cached === true ) {
-			// It has
-			return when.resolve( true );
-		} else if ( cached && _.isFunction( cached.then ) ) {
-			// This request is already in flight
-			// Return the cached promise
-			return cached;
-		}
-
-		var cacheDeferred = when.defer();
-
-		var promise = cacheDeferred.promise;
 
 		debug( "Acquiring key %s with sessionId: %s", key, this.sessionId );
+
+		if ( _.isFunction( this.strategy.getLock ) ) {
+			var lock = this.strategy.getLock( key );
+			if ( lock ) {
+				return lock;
+			}
+		}
+
+		var deferred = when.defer();
+
+		var promise = deferred.promise;
+
+		this.emit( "lock.request", { key: key, value: promise } );
 
 		var options = {
 			key: key,
@@ -66,33 +79,24 @@ var Locker = machina.Fsm.extend( {
 
 		var onSuccess = function( result ) {
 			if ( result[ 0 ] === false ) {
-				return cacheDeferred.reject( new Error( "Already locked" ) );
+				return deferred.reject( new Error( "Already locked" ) );
 			}
-			return cacheDeferred.resolve( result[ 0 ] );
+			return deferred.resolve( result[ 0 ] );
 		};
 
-		this.consul.kv.set( options ).then( onSuccess, cacheDeferred.reject );
+		this.consul.kv.set( options ).then( onSuccess, deferred.reject );
 
 		var onResolve = function() {
-			this._cache[ key ] = true;
+			this.emit( "lock.response", { key: key, value: true } );
 		}.bind( this );
 
 		var onReject = function() {
-			this._cache[ key ] = false;
+			this.emit( "lock.response", { key: key, value: false } );
 		}.bind( this );
 
 		promise.then( onResolve, onReject );
 
-		this._cache[ key ] = promise;
-
 		return promise;
-	},
-
-	_removeFromCache: function( id ) {
-		var key = this._getKey( id );
-		if ( this._cache[ key ] ) {
-			this._cache[ key ] = undefined;
-		}
 	},
 
 	_release: function( id ) {
@@ -104,20 +108,17 @@ var Locker = machina.Fsm.extend( {
 			release: this.sessionId
 		};
 
+		this.emit( "lock.release", { key: key } );
+
 		return this.consul.kv.set( options );
 	},
-
-	_wait: function( id ) {},
 
 	initialState: "acquiring",
 	states: {
 		acquiring: {
 			_onEnter: function() {
 				debug( "Acquiring..." );
-				var onSuccess = function( result ) {
-					var session = result[ 0 ];
-					debug( "Session acquired with id %s", session.ID );
-					this.sessionId = session.ID;
+				var onSuccess = function( session ) {
 					this.transition( "ready" );
 				}.bind( this );
 
@@ -126,6 +127,7 @@ var Locker = machina.Fsm.extend( {
 					// Should probably do something useful here like try to reconnect
 					console.log( "Error acquiring session" );
 					console.log( err );
+					this.reboot();
 				}.bind( this );
 
 				this._startSession().then( onSuccess, onFail );
@@ -134,25 +136,47 @@ var Locker = machina.Fsm.extend( {
 				this.deferUntilTransition( "ready" );
 			},
 			release: function( id, deferred ) {
-				this._removeFromCache( id );
+				var key = this._getKey( id );
+				this.emit( "lock.release", { key: key } );
 				return deferred.resolve( true );
 			}
 		},
 		ready: {
+			_onEnter: function() {
+				this.rebootCount = 0;
+			},
 			lock: function( id, deferred ) {
 				debug( "Attempting to lock id: %s", id );
 				return this._lock( id ).then( deferred.resolve, deferred.reject );
 			},
 			release: function( id, deferred ) {
-				this._removeFromCache( id );
+				var key = this._getKey( id );
+				this.emit( "lock.release", { key: key } );
 				return this._release( id ).then( deferred.resolve, deferred.reject );
 			}
 		},
+
+		paused: {
+			lock: function() {
+				this.deferUntilTransition( "ready" );
+			},
+			release: function() {
+				this.deferUntilTransition( "ready" );
+			}
+		},
+
 		stopped: {
 			_onEnter: function() {
 				if ( this.sessionId ) {
 					this._endSession();
 				}
+			},
+			lock: function( id, deferred ) {
+				return deferred.reject( new Error( "Locking session has ended" ) );
+			},
+
+			release: function( id, deferred ) {
+				return deferred.reject( new Error( "Locking session has ended" ) );
 			}
 		}
 	},
@@ -167,6 +191,31 @@ var Locker = machina.Fsm.extend( {
 		var deferred = when.defer();
 		this.handle( "release", id, deferred );
 		return deferred.promise;
+	},
+
+	start: function() {
+		this.transition( "acquiring" );
+	},
+
+	stop: function() {
+		return this._endSession()
+			.then( function() {
+				this.transition( "stopped" );
+			}.bind( this ) );
+	},
+
+	reboot: function() {
+		this.transition( "paused" );
+		this.rebootCount++;
+
+		if ( this.rebootCount <= this.maxRetries ) {
+			setTimeout( function() {
+				this.start();
+			}.bind( this ), this.retryInterval );
+		} else {
+			this.transition( "stopped" );
+			console.error( "Retry limit exceeded. Shutting down locker." );
+		}
 	}
 } );
 
