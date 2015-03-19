@@ -88,14 +88,23 @@ var Locker = machina.Fsm.extend( {
 		return promise;
 	},
 
-	_release: function( id ) {
+	_removeFromCache: function( id ) {
 		var key = this._getKey( id );
 		if ( this._cache[ key ] ) {
 			this._cache[ key ] = undefined;
 		}
-		return this.consul.kv.set( key, null, {
+	},
+
+	_release: function( id ) {
+		var key = this._getKey( id );
+		debug( "Releasing key %s", key );
+		var options = {
+			key: key,
+			value: "",
 			release: this.sessionId
-		} );
+		};
+
+		return this.consul.kv.set( options );
 	},
 
 	_wait: function( id ) {},
@@ -106,7 +115,7 @@ var Locker = machina.Fsm.extend( {
 			_onEnter: function() {
 				debug( "Acquiring..." );
 				var onSuccess = function( result ) {
-					var session = result[ 0 ]
+					var session = result[ 0 ];
 					debug( "Session acquired with id %s", session.ID );
 					this.sessionId = session.ID;
 					this.transition( "ready" );
@@ -124,8 +133,9 @@ var Locker = machina.Fsm.extend( {
 			lock: function() {
 				this.deferUntilTransition( "ready" );
 			},
-			release: function() {
-				return when.resolve( true );
+			release: function( id, deferred ) {
+				this._removeFromCache( id );
+				return deferred.resolve( true );
 			}
 		},
 		ready: {
@@ -133,8 +143,9 @@ var Locker = machina.Fsm.extend( {
 				debug( "Attempting to lock id: %s", id );
 				return this._lock( id ).then( deferred.resolve, deferred.reject );
 			},
-			release: function( id ) {
-				return this._release( id );
+			release: function( id, deferred ) {
+				this._removeFromCache( id );
+				return this._release( id ).then( deferred.resolve, deferred.reject );
 			}
 		},
 		stopped: {
@@ -153,7 +164,9 @@ var Locker = machina.Fsm.extend( {
 	},
 
 	release: function( id ) {
-		return this.handle( "release", id );
+		var deferred = when.defer();
+		this.handle( "release", id, deferred );
+		return deferred.promise;
 	}
 } );
 
