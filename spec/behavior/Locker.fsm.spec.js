@@ -387,4 +387,535 @@ describe( "Locker FSM", function() {
 
 	} );
 
+	describe( "public API", function() {
+		var myLocker;
+
+		before( function() {
+			myLocker = new Locker( {
+				initialState: "stopped",
+				name: "myServiceWriter"
+			}, consul, strategy );
+
+		} );
+
+
+		describe( "when attempting to lock", function() {
+			var handle;
+			var request;
+			before( function() {
+				handle = sinon.stub( myLocker, "handle", function( state, id, deferred ) {
+					return deferred.resolve( "got it" );
+				} );
+
+				request = myLocker.lock( "someid" );
+			} );
+
+			after( function() {
+				handle.restore();
+			} );
+
+			it( "should resolve with the result", function() {
+				request.should.eventually.equal( "got it" );
+			} );
+
+			it( "should call handle with the correct arguments", function() {
+				handle.should.have.been.calledWith( "lock", "someid" );
+			} );
+
+		} );
+
+		describe( "when attempting to release", function() {
+			var handle;
+			var request;
+			before( function() {
+				handle = sinon.stub( myLocker, "handle", function( state, id, deferred ) {
+					return deferred.resolve( "released" );
+				} );
+
+				request = myLocker.release( "someid" );
+			} );
+
+			after( function() {
+				handle.restore();
+			} );
+
+			it( "should resolve with the result", function() {
+				request.should.eventually.equal( "released" );
+			} );
+
+			it( "should call handle with the correct arguments", function() {
+				handle.should.have.been.calledWith( "release", "someid" );
+			} );
+		} );
+
+		describe( "when starting", function() {
+			var t;
+			before( function() {
+				t = sinon.stub( myLocker, "transition" );
+				myLocker.start();
+			} );
+
+			after( function() {
+				t.restore();
+			} );
+
+			it( "should transition to acquiring", function() {
+				t.should.have.been.calledWith( "acquiring" );
+			} );
+		} );
+
+		describe( "when stopping", function() {
+
+			var t;
+			var end;
+			before( function() {
+				t = sinon.stub( myLocker, "transition" );
+				end = sinon.stub( myLocker, "_endSession" );
+			} );
+
+			after( function() {
+				t.restore();
+				end.restore();
+			} );
+
+			describe( "when session end succeeds", function() {
+
+				before( function() {
+					end.reset();
+					end.resolves( true );
+					myLocker.stop();
+				} );
+
+				after( function() {
+					end.reset();
+				} );
+
+				it( "should transition to stopped", function() {
+					t.should.have.been.calledWith( "stopped" );
+				} );
+			} );
+
+			describe( "when session end fails", function() {
+				before( function() {
+					end.reset();
+					end.rejects( new Error( "I just can't stop" ) );
+					myLocker.stop();
+				} );
+
+				after( function() {
+					end.reset();
+				} );
+
+				it( "should transition to stopped", function() {
+					t.should.have.been.calledWith( "stopped" );
+				} );
+			} );
+		} );
+
+		describe( "when rebooting", function() {
+			var t;
+			before( function() {
+				t = sinon.stub( myLocker, "transition" );
+			} );
+
+			after( function() {
+				t.restore();
+			} );
+			describe( "when reboot tries are remaining", function() {
+
+				var start;
+
+				before( function( done ) {
+					start = sinon.stub( myLocker, "start" );
+					myLocker.rebootCount = 1;
+					myLocker.maxRetries = 5;
+					myLocker.retryInterval = 10;
+					myLocker.reboot();
+
+					setTimeout( function() {
+						done();
+					}, 50 );
+				} );
+
+				after( function() {
+					start.restore();
+				} );
+
+				it( "should increment the reboot count", function() {
+					myLocker.rebootCount.should.equal( 2 );
+				} );
+
+				it( "should call start after the interval is up", function() {
+					start.should.have.been.called;
+				} );
+
+			} );
+			describe( "when reboot limit has been reached", function() {
+				var err;
+				before( function() {
+					err = sinon.stub( console, "error" );
+					myLocker.rebootCount = 5;
+					myLocker.maxRetries = 5;
+					myLocker.reboot();
+				} );
+
+				after( function() {
+					err.restore();
+					t.reset();
+				} );
+
+				it( "should transition to stopped", function() {
+					t.should.have.been.calledWith( "stopped" );
+				} );
+
+				it( "should log an error message", function() {
+					err.should.have.been.calledWith( "Retry limit exceeded. Shutting down locker." );
+				} );
+			} );
+		} );
+	} );
+
+	describe( "Locker States", function() {
+		var myLocker;
+		var t;
+		var defer;
+		before( function() {
+			myLocker = new Locker( {
+				initialState: "stopped",
+				name: "myServiceWriter"
+			}, consul, strategy );
+
+			myLocker._transition = myLocker.transition;
+			t = sinon.stub( myLocker, "transition" );
+			defer = sinon.stub( myLocker, "deferUntilTransition" );
+		} );
+		describe( "acquiring", function() {
+			var start;
+			before( function() {
+				start = sinon.stub( myLocker, "_startSession" );
+			} );
+
+			after( function() {
+				start.restore();
+			} );
+
+			describe( "when entering", function() {
+				describe( "when session starting succeeds", function() {
+					before( function( done ) {
+						start.resolves( true );
+						myLocker.states.acquiring._onEnter.call( myLocker );
+						setTimeout( function() {
+							done();
+						}, 100 );
+					} );
+
+					after( function() {
+						start.reset();
+						t.reset();
+					} );
+
+					it( "should transition to ready", function() {
+						t.should.have.been.calledWith( "ready" );
+					} );
+				} );
+				describe( "when session starting fails", function() {
+					var reboot;
+					var expectedError = new Error( "No Starting" );
+					var log;
+					before( function( done ) {
+						log = sinon.stub( console, "error" );
+						reboot = sinon.stub( myLocker, "reboot" );
+						start.rejects( expectedError );
+						myLocker.states.acquiring._onEnter.call( myLocker );
+						setTimeout( function() {
+							done();
+						}, 100 );
+					} );
+
+					after( function() {
+						start.reset();
+						t.reset();
+						log.restore();
+						reboot.restore();
+					} );
+
+					it( "should transition to ready", function() {
+						reboot.should.have.been.called;
+					} );
+
+					it( "should log the error", function() {
+						log.should.have.been.calledWith( "Error acquiring session" );
+						log.should.have.been.calledWith( expectedError.toString() );
+					} );
+				} );
+			} );
+
+			describe( "when locking", function() {
+				before( function() {
+					defer.reset();
+					myLocker.states.acquiring.lock.call( myLocker );
+				} );
+
+				after( function() {
+					defer.reset();
+				} );
+
+				it( "should defer until ready", function() {
+					defer.should.have.been.calledWith( "ready" );
+				} );
+			} );
+
+			describe( "when releasing", function() {
+				var deferred;
+				var promise;
+				var eventMsg;
+				before( function() {
+					deferred = when.defer();
+					promise = deferred.promise;
+
+					myLocker.on( "lock.release", function( data ) {
+						eventMsg = data;
+					} );
+
+					myLocker.states.acquiring.release.call( myLocker, 123, deferred );
+				} );
+
+				it( "should resolve to true", function() {
+					promise.should.eventually.equal( true );
+				} );
+
+				it( "should emit a release event", function() {
+					eventMsg.should.eql( {
+						key: "myServiceWriter/123/lock"
+					} );
+				} );
+			} );
+
+		} );
+
+		describe( "ready", function() {
+			describe( "when entering", function() {
+				before( function() {
+					myLocker.rebootCount = 5;
+					myLocker._transition( "ready" );
+				} );
+
+				it( "should reset the reboot count", function() {
+					myLocker.rebootCount.should.equal( 0 );
+				} );
+			} );
+
+			describe( "when locking", function() {
+				var lock;
+				before( function() {
+					myLocker._transition( "ready" );
+					lock = sinon.stub( myLocker, "_lock" );
+				} );
+				describe( "when lock succeeds", function() {
+					var deferred;
+					var promise;
+					before( function() {
+						deferred = when.defer();
+						promise = deferred.promise;
+						lock.reset();
+						lock.resolves( true );
+						myLocker.states.ready.lock.call( myLocker, 456, deferred );
+					} );
+
+					after( function() {
+						lock.reset();
+					} );
+
+					it( "should resolve with the result", function() {
+						promise.should.eventually.equal( true );
+					} );
+
+					it( "should call lock with the correct id", function() {
+						lock.should.have.been.calledWith( 456 );
+					} );
+
+				} );
+				describe( "when lock fails", function() {
+					var deferred;
+					var promise;
+					var expectedError = new Error( "no locking" );
+					before( function() {
+						deferred = when.defer();
+						promise = deferred.promise;
+						lock.reset();
+						lock.rejects( expectedError );
+						myLocker.states.ready.lock.call( myLocker, 456, deferred );
+					} );
+
+					after( function() {
+						lock.reset();
+					} );
+
+					it( "should reject with the error", function() {
+						promise.should.be.rejectedWith( expectedError );
+					} );
+
+					it( "should call lock with the correct id", function() {
+						lock.should.have.been.calledWith( 456 );
+					} );
+				} );
+			} );
+
+			describe( "when releasing", function() {
+				var release;
+				before( function() {
+					myLocker._transition( "ready" );
+					release = sinon.stub( myLocker, "_release" );
+				} );
+				describe( "when releasing succeeds", function() {
+					var deferred;
+					var promise;
+					var eventMsg;
+					before( function() {
+						deferred = when.defer();
+						promise = deferred.promise;
+						release.reset();
+						release.resolves( true );
+						myLocker.on( "lock.release", function( data ) {
+							eventMsg = data;
+						} );
+						myLocker.states.ready.release.call( myLocker, 456, deferred );
+					} );
+
+					after( function() {
+						release.reset();
+					} );
+
+					it( "should resolve with the result", function() {
+						promise.should.eventually.equal( true );
+					} );
+
+					it( "should call lock with the correct id", function() {
+						release.should.have.been.calledWith( 456 );
+					} );
+
+					it( "should emit a lock release event", function() {
+						eventMsg.should.eql( {
+							key: "myServiceWriter/456/lock"
+						} );
+					} );
+				} );
+
+				describe( "when releasing fails", function() {
+					var deferred;
+					var promise;
+					var eventMsg;
+					var expectedError = new Error( "No Releasing" );
+					before( function() {
+						deferred = when.defer();
+						promise = deferred.promise;
+						release.reset();
+						release.rejects( expectedError );
+						myLocker.on( "lock.release", function( data ) {
+							eventMsg = data;
+						} );
+						myLocker.states.ready.release.call( myLocker, 456, deferred );
+					} );
+
+					after( function() {
+						release.reset();
+					} );
+
+					it( "should reject with the error", function() {
+						promise.should.be.rejectedWith( expectedError );
+					} );
+
+					it( "should call lock with the correct id", function() {
+						release.should.have.been.calledWith( 456 );
+					} );
+
+					it( "should emit a lock release event", function() {
+						eventMsg.should.eql( {
+							key: "myServiceWriter/456/lock"
+						} );
+					} );
+				} );
+			} );
+
+		} );
+
+		describe( "paused", function() {
+			before( function() {
+				myLocker._transition( "paused" );
+			} );
+
+			describe( "when locking", function() {
+				before( function() {
+					defer.reset();
+					myLocker.handle( "lock", 123 );
+				} );
+
+				it( "should defer until ready", function() {
+					defer.should.have.been.calledWith( "ready" );
+				} );
+			} );
+
+			describe( "when releasing", function() {
+				before( function() {
+					defer.reset();
+					myLocker.handle( "release", 123 );
+				} );
+
+				it( "should defer until ready", function() {
+					defer.should.have.been.calledWith( "ready" );
+				} );
+			} );
+		} );
+
+		describe( "stopped", function() {
+			var stoppedError = new Error( "Locking session has ended" );
+			describe( "when entering", function() {
+				var end;
+				before( function() {
+					end = sinon.stub( myLocker, "_endSession" );
+					myLocker.sessionId = "heyimasession";
+					myLocker.states.stopped._onEnter.call( myLocker );
+				} );
+
+				after( function() {
+					end.restore();
+				} );
+
+				it( "should end the session", function() {
+					end.should.have.been.called;
+				} );
+			} );
+
+			describe( "locking", function() {
+				var deferred;
+				var promise;
+				before( function() {
+					deferred = when.defer();
+					promise = deferred.promise;
+					myLocker._transition( "stopped" );
+					myLocker.handle( "lock", "id", deferred );
+				} );
+
+				it( "should reject with error", function() {
+					promise.should.be.rejectedWith( stoppedError );
+				} );
+			} );
+
+			describe( "releasing", function() {
+				var deferred;
+				var promise;
+				before( function() {
+					deferred = when.defer();
+					promise = deferred.promise;
+					myLocker._transition( "stopped" );
+					myLocker.handle( "release", "id", deferred );
+				} );
+
+				it( "should reject with error", function() {
+					promise.should.be.rejectedWith( stoppedError );
+				} );
+			} );
+		} );
+	} );
+
 } );

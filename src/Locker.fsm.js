@@ -4,6 +4,8 @@ var util = require( "util" );
 var when = require( "when" );
 var machina = require( "machina" );
 
+var endedError = new Error( "Locking session has ended" );
+
 var Locker = machina.Fsm.extend( {
 	initialize: function( options, consul, strategy ) {
 		debug( "Initializing Locker FSM" );
@@ -125,8 +127,8 @@ var Locker = machina.Fsm.extend( {
 				var onFail = function( err ) {
 					debug( "Session could not be created: %s", err.toString() );
 					// Should probably do something useful here like try to reconnect
-					console.log( "Error acquiring session" );
-					console.log( err );
+					console.error( "Error acquiring session" );
+					console.error( err.toString() );
 					this.reboot();
 				}.bind( this );
 
@@ -172,11 +174,11 @@ var Locker = machina.Fsm.extend( {
 				}
 			},
 			lock: function( id, deferred ) {
-				return deferred.reject( new Error( "Locking session has ended" ) );
+				return deferred.reject( endedError );
 			},
 
 			release: function( id, deferred ) {
-				return deferred.reject( new Error( "Locking session has ended" ) );
+				return deferred.reject( endedError );
 			}
 		}
 	},
@@ -198,10 +200,12 @@ var Locker = machina.Fsm.extend( {
 	},
 
 	stop: function() {
-		return this._endSession()
-			.then( function() {
-				this.transition( "stopped" );
-			}.bind( this ) );
+
+		var done = function() {
+			this.transition( "stopped" );
+		}.bind( this );
+
+		return this._endSession().then( done, done );
 	},
 
 	reboot: function() {
