@@ -29,12 +29,22 @@ describe( "Locker FSM", function() {
 		before( function() {
 			myLocker = new Locker( {
 				initialState: "stopped",
-				name: "myServiceWriter"
+				name: "myServiceWriter",
+				maxRetries: 15,
+				retryInterval: 45
 			}, consul, strategy );
 		} );
 
 		it( "should set the name from options", function() {
 			myLocker.sessionName.should.equal( "myServiceWriter" );
+		} );
+
+		it( "should set the max retries", function() {
+			myLocker.maxRetries.should.equal( 15 );
+		} );
+
+		it( "should set the retry interval", function() {
+			myLocker.retryInterval.should.equal( 45000 );
 		} );
 	} );
 
