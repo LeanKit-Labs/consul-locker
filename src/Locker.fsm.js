@@ -220,6 +220,21 @@ var Locker = machina.Fsm.extend( {
 			this.transition( "stopped" );
 			console.error( "Retry limit exceeded. Shutting down locker." );
 		}
+	},
+
+	info: function( id ) {
+		var key = this._getKey( id );
+		return this.consul.kv.get( key )
+			.then( function( response ) {
+				return response[ 0 ];
+			} );
+	},
+
+	sessionInfo: function( sessionId ) {
+		return this.consul.session.info( sessionId )
+			.then( function( response ) {
+				return response[ 0 ];
+			} );
 	}
 } );
 

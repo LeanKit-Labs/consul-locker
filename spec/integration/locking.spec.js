@@ -160,7 +160,7 @@ describe( "locking integration", function() {
 				myLocker2.lock.bind( myLocker2, key2 ),
 				myLocker.stop.bind( myLocker, key ),
 				myLocker2.lock.bind( myLocker2, key ),
-				myLocker2.lock.bind( myLocker2, key2 ),
+				myLocker2.lock.bind( myLocker2, key2 )
 			].map( function( task ) {
 				return taskWrapper( task );
 			} );
@@ -180,6 +180,50 @@ describe( "locking integration", function() {
 			results[ 4 ].state.should.equal( "fulfilled" );
 			results[ 5 ].state.should.equal( "fulfilled" );
 			results[ 6 ].state.should.equal( "fulfilled" );
+		} );
+
+	} );
+
+	describe( "when getting lock information", function() {
+		var myLocker;
+		var myLocker2;
+		var key = 867;
+		var results;
+		var info;
+		var session;
+
+		before( function( done ) {
+			this.timeout( 5000 );
+			myLocker = LockerFactory.create( {
+				name: "lockingCardWrites"
+			} );
+
+			myLocker2 = LockerFactory.create( {
+				name: "lockingCardWrites"
+			} );
+
+			var promise = myLocker.lock( key )
+				.then( function() {
+					return myLocker2.info( key );
+				} )
+				.then( function( _info ) {
+					info = _info;
+					return myLocker2.sessionInfo( info.Session );
+				} )
+				.then( function( _session ) {
+					session = _session;
+					done();
+				} );
+
+		} );
+
+		it( "should return the right lock info", function() {
+			info.Session.should.equal( myLocker.sessionId );
+		} );
+
+		it( "should return the correct session info", function() {
+			session.ID.should.equal( myLocker.sessionId );
+			session.Name.should.equal( myLocker.sessionName );
 		} );
 
 	} );

@@ -11,10 +11,12 @@ describe( "Locker FSM", function() {
 		consul = {
 			session: {
 				create: sinon.stub(),
-				destroy: sinon.stub()
+				destroy: sinon.stub(),
+				info: sinon.stub()
 			},
 			kv: {
-				set: sinon.stub()
+				set: sinon.stub(),
+				get: sinon.stub()
 			}
 		};
 		strategy = function( locker ) {
@@ -581,6 +583,48 @@ describe( "Locker FSM", function() {
 				it( "should log an error message", function() {
 					err.should.have.been.calledWith( "Retry limit exceeded. Shutting down locker." );
 				} );
+			} );
+		} );
+		describe( "when getting lock info", function() {
+			var info = { Session: "session123" };
+			var result;
+			before( function() {
+				consul.kv.get.reset();
+				consul.kv.get.resolves( [ info ] );
+				result = myLocker.info( 123 );
+			} );
+			after( function() {
+				consul.kv.get.reset();
+			} );
+
+			it( "should return the correct result", function() {
+				result.should.eventually.eql( info );
+			} );
+
+			it( "should use the correct arguments", function() {
+				consul.kv.get.should.have.been.calledWith( "myServiceWriter/123/lock" );
+			} );
+
+		} );
+
+		describe( "when getting session info", function() {
+			var info = { ID: "session123" };
+			var result;
+			before( function() {
+				consul.session.info.reset();
+				consul.session.info.resolves( [ info ] );
+				result = myLocker.sessionInfo( "session123" );
+			} );
+			after( function() {
+				consul.session.info.reset();
+			} );
+
+			it( "should return the correct result", function() {
+				result.should.eventually.eql( info );
+			} );
+
+			it( "should use the correct arguments", function() {
+				consul.session.info.should.have.been.calledWith( "session123" );
 			} );
 		} );
 	} );
