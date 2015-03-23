@@ -4,7 +4,7 @@ var consulFactory = require( "consul" );
 
 var toLift = {
 	kv: [ "get", "keys", "set", "del" ],
-	session: [ "create", "destroy", "get", "node", "list", "renew" ]
+	session: [ "create", "destroy", "get", "info", "node", "list", "renew" ]
 };
 
 module.exports = function( _config ) {

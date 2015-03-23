@@ -87,6 +87,10 @@ Available configuration options:
 
 * `name`: (String) The name of the session. Used as the key prefix for generating lock keys.
 
+* `maxRetries`: (Number) The number of times the locker will reattempt to create a session if the initial creation fails. Defaults to 10.
+
+* `retryInterval`: (Number) The number of seconds to wait between retries. Defaults to 30.
+
 **IMPORTANT:** *The `name` property is used to create keys for locking. Therefore, if you want lockers to compete in the same keyspace, you'll have to name them the same thing. Otherwise, they will all compete in their own keyspace which means they will always win their locks and you will lose.*
 
 Example:
