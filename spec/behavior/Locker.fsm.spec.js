@@ -427,7 +427,7 @@ describe( "Locker FSM", function() {
 			} );
 
 			it( "should resolve with the result", function() {
-				request.should.eventually.equal( "got it" );
+				return request.should.eventually.equal( "got it" );
 			} );
 
 			it( "should call handle with the correct arguments", function() {
@@ -452,7 +452,7 @@ describe( "Locker FSM", function() {
 			} );
 
 			it( "should resolve with the result", function() {
-				request.should.eventually.equal( "released" );
+				return request.should.eventually.equal( "released" );
 			} );
 
 			it( "should call handle with the correct arguments", function() {
@@ -598,7 +598,7 @@ describe( "Locker FSM", function() {
 			} );
 
 			it( "should return the correct result", function() {
-				result.should.eventually.eql( info );
+				return result.should.eventually.eql( info );
 			} );
 
 			it( "should use the correct arguments", function() {
@@ -620,7 +620,7 @@ describe( "Locker FSM", function() {
 			} );
 
 			it( "should return the correct result", function() {
-				result.should.eventually.eql( info );
+				return result.should.eventually.eql( info );
 			} );
 
 			it( "should use the correct arguments", function() {
@@ -693,7 +693,7 @@ describe( "Locker FSM", function() {
 						reboot.restore();
 					} );
 
-					it( "should transition to ready", function() {
+					it( "should try to reboot", function() {
 						reboot.should.have.been.called;
 					} );
 
@@ -735,7 +735,7 @@ describe( "Locker FSM", function() {
 				} );
 
 				it( "should resolve to true", function() {
-					promise.should.eventually.equal( true );
+					return promise.should.eventually.equal( true );
 				} );
 
 				it( "should emit a release event", function() {
@@ -781,7 +781,7 @@ describe( "Locker FSM", function() {
 					} );
 
 					it( "should resolve with the result", function() {
-						promise.should.eventually.equal( true );
+						return promise.should.eventually.equal( true );
 					} );
 
 					it( "should call lock with the correct id", function() {
@@ -806,7 +806,7 @@ describe( "Locker FSM", function() {
 					} );
 
 					it( "should reject with the error", function() {
-						promise.should.be.rejectedWith( expectedError );
+						return promise.should.be.rejectedWith( expectedError );
 					} );
 
 					it( "should call lock with the correct id", function() {
@@ -841,7 +841,7 @@ describe( "Locker FSM", function() {
 					} );
 
 					it( "should resolve with the result", function() {
-						promise.should.eventually.equal( true );
+						return promise.should.eventually.equal( true );
 					} );
 
 					it( "should call lock with the correct id", function() {
@@ -859,7 +859,7 @@ describe( "Locker FSM", function() {
 					var deferred;
 					var promise;
 					var eventMsg;
-					var expectedError = new Error( "No Releasing" );
+					var expectedError = "No Releasing";
 					before( function() {
 						deferred = when.defer();
 						promise = deferred.promise;
@@ -876,7 +876,7 @@ describe( "Locker FSM", function() {
 					} );
 
 					it( "should reject with the error", function() {
-						promise.should.be.rejectedWith( expectedError );
+						return promise.should.be.rejectedWith( expectedError );
 					} );
 
 					it( "should call lock with the correct id", function() {
@@ -943,30 +943,40 @@ describe( "Locker FSM", function() {
 			describe( "locking", function() {
 				var deferred;
 				var promise;
-				before( function() {
+				var receivedError;
+				before( function( done ) {
 					deferred = when.defer();
 					promise = deferred.promise;
+					promise.then( null, function( err ) {
+						receivedError = err;
+						done();
+					} );
 					myLocker._transition( "stopped" );
 					myLocker.handle( "lock", "id", deferred );
 				} );
 
 				it( "should reject with error", function() {
-					promise.should.be.rejectedWith( stoppedError );
+					receivedError.should.eql( stoppedError );
 				} );
 			} );
 
 			describe( "releasing", function() {
 				var deferred;
 				var promise;
-				before( function() {
+				var receivedError;
+				before( function( done ) {
 					deferred = when.defer();
 					promise = deferred.promise;
+					promise.then( null, function( err ) {
+						receivedError = err;
+						done();
+					} );
 					myLocker._transition( "stopped" );
 					myLocker.handle( "release", "id", deferred );
 				} );
 
 				it( "should reject with error", function() {
-					promise.should.be.rejectedWith( stoppedError );
+					receivedError.should.eql( stoppedError );
 				} );
 			} );
 		} );
