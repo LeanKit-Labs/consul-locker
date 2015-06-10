@@ -7,7 +7,16 @@
     "test": "gulp test"
   },
   "author": "LeanKit",
-  "license": "Copyright LeanKit 2014",
+  "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "contributors": [
+    {
+      "name": "Brian Edgerton",
+      "url": "http://github.com/brianedgerton"
+    }
+  ],
   "dependencies": {
     "consul": "^0.13.0",
     "debug": "^2.1.3",
